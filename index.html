@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cluster Visualization</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Include jQuery, jQuery UI, and D3 -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://code.jquery.com/ui/1.13.0/jquery-ui.min.js"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar for clusters -->
+    <div class="sidebar">
+      <h1>Document Clusters</h1>
+      <div id="clustering-buttons" class="button-container">
+        <button id="btn-kmeans" class="btn">K-Means</button>
+        <button id="btn-biclustering" class="btn">Biclustering</button>
+        <button id="btn-hierarchical" class="btn">Hierarchical</button>
+      </div>
+      <div id="clusters"></div>
+    </div>
+
+    <!-- Main inner container: top box is Plot, bottom box is Workspace -->
+    <div class="main-inner">
+      <!-- Top box for MDS Plot -->
+      <div id="plot-box">
+        <div class="box-header">MDS Plot</div>
+        <div id="plot-container"></div>
+      </div>
+      <!-- Bottom box for Workspace -->
+      <div id="workspace-box">
+        <div class="box-header">Workspace</div>
+        <div class="workspace-header">
+          <button id="arrange-btn" class="btn">Arrange Grid</button>
+          <button id="reset-btn" class="btn">Reset</button>
+          <button id="group-btn" class="btn">Group</button>
+          <button id="delete-btn" class="btn">Delete</button>
+        </div>
+        <div id="workspace"></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Minimized bar for documents -->
+  <div id="minimized-bar">
+    <div id="minimized-docs"></div>
+  </div>
+  
+  <script>
+    // Global constants and selectors
+    const DOCS_PATH = 'dataset/dataset';
+    const workspace = d3.select('#workspace');
+    const minimizedContainer = d3.select('#minimized-docs');
+    const minimizedBar = d3.select('#minimized-bar');
+    let docZIndex = 0;
+    let docStackOffset = 0;  // For cascading offset
+    const offsetVal = 20;    // Pixels to offset each new window
+
+    // Function to load clustering results into the sidebar
+    function loadClusters(jsonFile) {
+      $("#clusters").empty();
+      d3.json(jsonFile).then(function(data) {
+        Object.keys(data).forEach(cluster => {
+          const numFiles = data[cluster].length;
+          let block = $('<div class="cluster-block" data-cluster="' + cluster + '"></div>');
+          let header = $('<h2>Cluster ' + cluster + ' (' + numFiles + ') <button class="toggle-btn">Toggle</button></h2>');
+          block.append(header);
+          let ul = $('<ul></ul>');
+          data[cluster].forEach(function(docId) {
+            ul.append('<li class="file-item" data-id="' + docId + '">' + docId + '</li>');
+          });
+          block.append(ul);
+          $('#clusters').append(block);
+        });
+        $("#clusters").sortable();
+      }).catch(function(error) {
+        console.error("Error loading cluster data:", error);
+        alert("Failed to load cluster data from " + jsonFile);
+      });
+    }
+    
+    // Default load: K-Means clustering results
+    loadClusters("document_clusters_kmeans.json");
+    
+    // Event listeners for clustering buttons
+    $("#btn-kmeans").on("click", function() {
+      loadClusters("document_clusters_kmeans.json");
+    });
+    $("#btn-biclustering").on("click", function() {
+      loadClusters("document_clusters_biclustering.json");
+    });
+    $("#btn-hierarchical").on("click", function() {
+      loadClusters("document_clusters1.json");
+    });
+    
+    // Toggle cluster list visibility
+    $(document).on("click", ".toggle-btn", function(event) {
+      event.stopPropagation();
+      $(this).closest(".cluster-block").find("ul").toggle();
+    });
+    
+    // Open a document when a file item is clicked from the sidebar
+    $(document).on("click", ".file-item", function(event) {
+      const docId = $(this).data("id");
+      const cluster = $(this).closest(".cluster-block").data("cluster");
+      openDocuments([docId], (!cluster || cluster === null) ? 'unknown' : cluster);
+      event.stopPropagation();
+    });
+    
+    // Open document windows in a cascading stack centered in the workspace
+    async function openDocuments(ids, cluster) {
+      const wsWidth = parseInt($(".main-inner").width());
+      const wsHeight = parseInt($("#workspace-box").height());
+      const winWidth = 400;
+      const winHeight = 400;
+      const centerLeft = (wsWidth - winWidth) / 2;
+      const centerTop = (wsHeight - winHeight) / 2;
+      
+      for (const id of ids) {
+        if (!document.getElementById(id)) {
+          try {
+            const response = await fetch(`${DOCS_PATH}/${id}`);
+            if (!response.ok) throw new Error('File not found');
+            const content = await response.text();
+    
+            const leftPos = centerLeft + (docStackOffset * offsetVal);
+            const topPos = centerTop + (docStackOffset * offsetVal);
+    
+            const docWin = workspace.append('div')
+              .attr('class', 'document-window')
+              .attr('id', id)
+              .style('left', leftPos + 'px')
+              .style('top', topPos + 'px')
+              .style('width', winWidth + 'px')
+              .style('height', winHeight + 'px')
+              .style('z-index', ++docZIndex)
+              .attr('data-original-left', leftPos)
+              .attr('data-original-top', topPos)
+              .attr('data-cluster', (!cluster || cluster === null) ? 'unknown' : cluster);
+    
+            docStackOffset++;
+    
+            // Create header with title and control buttons.
+            const header = docWin.append('div')
+              .attr('class', 'document-header');
+            header.append('span')
+              .attr('class', 'doc-title')
+              .text(id);
+            const btnContainer = header.append('div')
+              .attr('class', 'header-buttons');
+            btnContainer.append('span')
+              .attr('class', 'minimize-button')
+              .text('-')
+              .on('click', () => minimizeDoc(id));
+            btnContainer.append('span')
+              .attr('class', 'close-button')
+              .text('x')
+              .on('click', () => {
+                docWin.remove();
+              });
+            
+            // Document content
+            docWin.append('div')
+              .attr('class', 'document-content')
+              .text(content);
+    
+            // Enable dragging
+            docWin.call(d3.drag().on('drag', (event) => {
+              const x = parseInt(docWin.style('left')) || 0;
+              const y = parseInt(docWin.style('top')) || 0;
+              docWin.style('left', `${x + event.dx}px`);
+              docWin.style('top', `${y + event.dy}px`);
+            }));
+          } catch (error) {
+            console.error(`Error loading ${id}:`, error);
+          }
+        }
+      }
+    }
+    
+    // Minimize a document window
+    function minimizeDoc(docId) {
+      const docWin = d3.select('#' + docId);
+      if (!docWin.empty()) {
+        docWin.remove();
+        minimizedContainer.append('div')
+          .attr('class', 'minimized-doc')
+          .text(docId)
+          .on('click', () => restoreDoc(docId));
+        minimizedBar.style('display', 'block');
+      }
+    }
+    
+    // Restore a minimized document window
+    function restoreDoc(docId) {
+      minimizedContainer.selectAll('.minimized-doc')
+        .filter(function() {
+          return d3.select(this).text() === docId;
+        })
+        .remove();
+      openDocuments([docId]);
+      if (minimizedContainer.selectAll('.minimized-doc').empty()) {
+        minimizedBar.style('display', 'none');
+      }
+    }
+    
+    // Arrange document windows into a grid within the workspace
+    $("#arrange-btn").on("click", function() {
+      const docWins = workspace.selectAll(".document-window").nodes();
+      const count = docWins.length;
+      if (count === 0) return;
+    
+      const wsWidth = parseInt($("#workspace").width());
+      const wsHeight = parseInt($("#workspace").height());
+      const cols = Math.ceil(Math.sqrt(count));
+      const rows = Math.ceil(count / cols);
+      const cellWidth = wsWidth / cols;
+      const cellHeight = wsHeight / rows;
+      const rightPadding = 10;
+      
+      docWins.forEach((win, idx) => {
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const leftPos = wsWidth - ((col + 1) * cellWidth) + rightPadding;
+        const topPos = row * cellHeight;
+        $(win).animate({
+          left: leftPos + "px",
+          top: topPos + "px",
+          width: (cellWidth - 20) + "px",
+          height: (cellHeight - 20) + "px"
+        }, 200);
+      });
+    });
+    
+    // Reset button: restore windows to original positions and size.
+    $("#reset-btn").on("click", function() {
+      workspace.selectAll(".document-window").nodes().forEach(win => {
+        const originalLeft = $(win).attr("data-original-left");
+        const originalTop = $(win).attr("data-original-top");
+        $(win).animate({
+          left: originalLeft + "px",
+          top: originalTop + "px",
+          width: "400px",
+          height: "400px"
+        }, 500);
+      });
+    });
+    
+    // Group button: group open documents by their cluster attribute.
+    $("#group-btn").on("click", function() {
+      $(".group-label").remove();
+      const docWins = workspace.selectAll(".document-window").nodes();
+      if (docWins.length === 0) return;
+      const groups = {};
+      docWins.forEach(win => {
+        const cluster = $(win).attr("data-cluster");
+        const key = (!cluster || cluster === "") ? "unknown" : cluster;
+        if (!groups[key]) {
+          groups[key] = [];
+        }
+        groups[key].push(win);
+      });
+      const wsWidth = parseInt($("#workspace").width());
+      const margin = 10;
+      const groupKeys = Object.keys(groups);
+      const colWidth = wsWidth / groupKeys.length;
+      groupKeys.forEach((clusterKey, colIndex) => {
+        const label = $("<div class='group-label'>" + clusterKey + "</div>");
+        label.css({
+          position: "absolute",
+          left: (colIndex * colWidth + margin) + "px",
+          top: "0px",
+          width: (colWidth - 2 * margin) + "px",
+          "text-align": "center",
+          "font-size": "14px",
+          "font-weight": "bold",
+          "background": "#ecf0f1",
+          "padding": "5px 0"
+        });
+        $("#workspace").append(label);
+    
+        const groupDocs = groups[clusterKey];
+        const docHeight = 400; 
+        const labelHeight = 30;
+        groupDocs.forEach((win, rowIndex) => {
+          const leftPos = colIndex * colWidth + margin;
+          const topPos = rowIndex * (docHeight + margin) + margin + labelHeight;
+          $(win).animate({
+            left: leftPos + "px",
+            top: topPos + "px",
+            width: (colWidth - 2 * margin) + "px",
+            height: docHeight + "px"
+          }, 500);
+        });
+      });
+    });
+    
+    // Delete button: remove all document windows, group labels and minimized docs
+    $("#delete-btn").on("click", function() {
+      workspace.selectAll(".document-window").remove();
+      $(".group-label").remove();
+      minimizedContainer.empty();
+      minimizedBar.style('display', 'none');
+      docZIndex = 0;
+      docStackOffset = 0;
+    });
+    
+    // -------------------------
+    // Plot MDS functionality (box separate from workspace)
+    // -------------------------
+    function openMDSPlot() {
+      const svgWidth = 1200, svgHeight = 400;
+      const margin = { top: 40, right: 20, bottom: 60, left: 60 };
+
+      // Create the SVG container and clear any previous content
+      const svg = d3.select("#plot-container")
+        .html("")
+        .append("svg")
+        .attr("width", svgWidth)
+        .attr("height", svgHeight)
+        .style("border", "1px solid #ccc");
+
+      // Create a tooltip div if not already added
+      let tooltip = d3.select("body").select("#tooltip");
+      if (tooltip.empty()) {
+        tooltip = d3.select("body")
+          .append("div")
+          .attr("id", "tooltip")
+          .style("position", "absolute")
+          .style("padding", "8px")
+          .style("background", "rgba(0, 0, 0, 0.7)")
+          .style("color", "#fff")
+          .style("border-radius", "4px")
+          .style("pointer-events", "none")
+          .style("opacity", 0);
+      }
+
+      d3.json("document_clusters_mds_with_coords.json").then(function(data) {
+        let points = [];
+        // New JSON format: { docId: { coords: [x, y], cluster: clusterNumber }, ... }
+        Object.keys(data).forEach(function(docId) {
+          const entry = data[docId];
+          points.push({
+            id: docId,
+            x: entry.coords[0],
+            y: entry.coords[1],
+            cluster: entry.cluster
+          });
+        });
+
+        // Compute extents for scaling
+        const xExtent = d3.extent(points, d => d.x);
+        const yExtent = d3.extent(points, d => d.y);
+
+        // Define linear scales for x and y axes
+        const xScale = d3.scaleLinear()
+          .domain([xExtent[0], xExtent[1]])
+          .range([margin.left, svgWidth - margin.right]);
+
+        const yScale = d3.scaleLinear()
+          .domain([yExtent[0], yExtent[1]])
+          .range([svgHeight - margin.bottom, margin.top]); // Invert y-axis
+
+        // Color scale for clusters
+        const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+        // Add circles for each point with a nice entrance transition.
+        const circles = svg.selectAll("circle")
+          .data(points)
+          .enter()
+          .append("circle")
+          .attr("cx", d => xScale(d.x))
+          .attr("cy", d => yScale(d.y))
+          .attr("r", 0)  // start with zero radius
+          .attr("fill", d => color(d.cluster))
+          .on("mouseover", function(event, d) {
+            d3.select(this)
+              .attr("stroke", "red")
+              .attr("stroke-width", 2);
+            
+            // Show tooltip with smooth animation and additional info
+            tooltip.transition()
+              .duration(200)
+              .style("opacity", 0.9);
+            tooltip.html("Document: " + d.id + "<br>" +
+                         "Dimension 1: " + d.x.toFixed(2) + "<br>" +
+                         "Dimension 2: " + d.y.toFixed(2) + "<br>" +
+                         "Cluster: " + d.cluster)
+              .style("left", (event.pageX + 10) + "px")
+              .style("top", (event.pageY - 28) + "px");
+
+            $(".file-item[data-id='" + d.id + "']").css("background-color", "darkgray");
+          })
+          .on("mousemove", function(event) {
+            tooltip.style("left", (event.pageX + 10) + "px")
+                   .style("top", (event.pageY - 28) + "px");
+          })
+          .on("mouseout", function(event, d) {
+            d3.select(this)
+              .attr("stroke", null)
+              .attr("stroke-width", null);
+            
+            // Hide tooltip smoothly
+            tooltip.transition()
+              .duration(500)
+              .style("opacity", 0);
+            $(".file-item[data-id='" + d.id + "']").css("background-color", "");
+          })
+          .on("click", function(event, d) {
+            // Clone the clicked circle so the original stays in place
+            const original = d3.select(this);
+            const clone = original.node().cloneNode(true);
+            svg.node().appendChild(clone);
+            const cloneSelection = d3.select(clone);
+            
+            // Animate the clone: enlarge and move to a target position (simulate moving into workspace)
+            cloneSelection
+              .transition()
+              .duration(1000)
+              .ease(d3.easeCubicInOut)
+              .attr("r", 20)
+              .attr("cx", svgWidth / 2)      // target x: center of svg
+              .attr("cy", svgHeight + 50)      // target y: below the svg (simulate moving into workspace)
+              .on("end", function() {
+                openDocuments([d.id], d.cluster);
+                cloneSelection.remove();  // remove the clone after transition completes
+              });
+          });
+
+        // Animate circles: radius grows to 8 with bounce effect.
+        circles.transition()
+          .duration(1000)
+          .ease(d3.easeBounceOut)
+          .attr("r", 8);
+
+        // Create axis generators
+        const xAxis = d3.axisBottom(xScale);
+        const yAxis = d3.axisLeft(yScale);
+
+        // Append and animate the x-axis
+        svg.append("g")
+          .attr("class", "x-axis")
+          .attr("transform", `translate(0, ${svgHeight - margin.bottom})`)
+          .call(xAxis)
+          .attr("opacity", 0)
+          .transition()
+          .duration(1000)
+          .attr("opacity", 1);
+
+        // Append and animate the y-axis
+        svg.append("g")
+          .attr("class", "y-axis")
+          .attr("transform", `translate(${margin.left}, 0)`)
+          .call(yAxis)
+          .attr("opacity", 0)
+          .transition()
+          .duration(1000)
+          .attr("opacity", 1);
+
+        // Add and animate x-axis label
+        svg.append("text")
+          .attr("class", "x-axis-label")
+          .attr("text-anchor", "middle")
+          .attr("font-size", "15px")
+          .attr("font-weight", "bold")
+          .attr("x", (margin.left + (svgWidth - margin.right)) / 2)
+          .attr("y", svgHeight - 20)
+          .attr("opacity", 0)
+          .text("Dimension 1")
+          .transition()
+          .duration(1000)
+          .attr("opacity", 1);
+
+        // Add and animate y-axis label
+        svg.append("text")
+          .attr("class", "y-axis-label")
+          .attr("transform", "rotate(-90)")
+          .attr("x", - (margin.top + ((svgHeight - margin.bottom - margin.top) / 2)))
+          .attr("y", margin.left - 40)
+          .attr("text-anchor", "middle")
+          .attr("font-size", "15px")
+          .attr("font-weight", "bold")
+          .attr("opacity", 0)
+          .text("Dimension 2")
+          .transition()
+          .duration(1000)
+          .attr("opacity", 1);
+
+      }).catch(function(error) {
+        console.error("Error loading MDS JSON data:", error);
+      });
+    }
+
+    $(document).ready(function() {
+      openMDSPlot();
+    });
+    
+  </script>
+</body>
+</html>
