@@ -82,17 +82,17 @@
     }
     
     // Default load: K-Means clustering results
-    loadClusters("document_clusters_kmeans.json");
+    loadClusters("json/document_clusters_kmeans.json");
     
     // Event listeners for clustering buttons
     $("#btn-kmeans").on("click", function() {
-      loadClusters("document_clusters_kmeans.json");
+      loadClusters("json/document_clusters_kmeans.json");
     });
     $("#btn-biclustering").on("click", function() {
-      loadClusters("document_clusters_biclustering.json");
+      loadClusters("json/document_clusters_biclustering.json");
     });
     $("#btn-hierarchical").on("click", function() {
-      loadClusters("document_clusters1.json");
+      loadClusters("json/document_clusters1.json");
     });
     
     // Toggle cluster list visibility
@@ -337,7 +337,7 @@
           .style("opacity", 0);
       }
 
-      d3.json("document_clusters_mds_with_coords.json").then(function(data) {
+      d3.json("json/document_clusters_mds_with_coords.json").then(function(data) {
         let points = [];
         // New JSON format: { docId: { coords: [x, y], cluster: clusterNumber }, ... }
         Object.keys(data).forEach(function(docId) {
